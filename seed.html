@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Seed Admin — Sentinela Agro</title>
+  <style>
+    body { background: #0a0f1a; color: #f1f5f9; font-family: monospace; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+    .box { background: #111827; border: 1px solid #1e293b; border-radius: 12px; padding: 32px; max-width: 480px; width: 100%; }
+    h2 { color: #22c55e; margin: 0 0 24px; }
+    button { background: #22c55e; color: #0a0f1a; border: none; padding: 12px 24px; border-radius: 8px; font-size: 15px; font-weight: 700; cursor: pointer; width: 100%; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #log { margin-top: 20px; font-size: 13px; line-height: 1.8; color: #94a3b8; }
+    .ok { color: #22c55e; } .err { color: #ef4444; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h2>🌿 Seed Admin</h2>
+    <p style="color:#94a3b8;margin-bottom:24px;font-size:14px">
+      Cria o usuário <strong style="color:#f1f5f9">admin@sentinelaagro.com</strong><br>
+      Senha: <strong style="color:#f1f5f9">AGRO35</strong><br>
+      Role: <strong style="color:#22c55e">admin</strong>
+    </p>
+    <button id="btn" onclick="runSeed()">▶ Executar Seed</button>
+    <div id="log"></div>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.0/firebase-app.js';
+    import { getAuth, createUserWithEmailAndPassword } from 'https://www.gstatic.com/firebasejs/11.6.0/firebase-auth.js';
+    import { getFirestore, doc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js';
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyBKEbmr7Jhsyc7aoWS73pTkTiImL-plmUI",
+      authDomain: "sentinela-agro-dev.firebaseapp.com",
+      projectId: "sentinela-agro-dev",
+      storageBucket: "sentinela-agro-dev.firebasestorage.app",
+      messagingSenderId: "961065577918",
+      appId: "1:961065577918:web:d20e32b3bde82617c35def"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    const log = (msg, cls = '') => {
+      document.getElementById('log').innerHTML += `<div class="${cls}">${msg}</div>`;
+    };
+
+    window.runSeed = async function() {
+      const btn = document.getElementById('btn');
+      btn.disabled = true;
+      btn.textContent = 'Aguarde...';
+
+      try {
+        log('→ Criando usuário no Firebase Auth...');
+        const result = await createUserWithEmailAndPassword(auth, 'admin@sentinelaagro.com', 'AGRO35');
+        log(`✓ Usuário criado: ${result.user.uid}`, 'ok');
+
+        log('→ Gravando documento /users/' + result.user.uid + '...');
+        await setDoc(doc(db, 'users', result.user.uid), {
+          name: 'Admin',
+          email: 'admin@sentinelaagro.com',
+          role: 'admin',
+          created_at: serverTimestamp()
+        });
+        log('✓ Documento Firestore gravado!', 'ok');
+        log('🎉 Seed concluído! Acesse /login.html', 'ok');
+        btn.textContent = '✓ Concluído';
+      } catch (err) {
+        if (err.code === 'auth/email-already-in-use') {
+          log('⚠ Usuário já existe — tudo certo, pode logar normalmente.', 'ok');
+          btn.textContent = '✓ Já existe';
+        } else {
+          log('✗ Erro: ' + err.message, 'err');
+          btn.disabled = false;
+          btn.textContent = '▶ Tentar novamente';
+        }
+      }
+    };
+  </script>
+</body>
+</html>
