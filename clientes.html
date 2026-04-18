@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Clientes — Sentinela Agro ERP</title>
+  <meta name="description" content="Gestão de clientes do Sentinela Agro ERP" />
+  <meta name="theme-color" content="#0a0f1a" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌿</text></svg>" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <div class="app-layout">
+    <div class="main-content" id="mainContent">
+      <div class="page-content">
+        <div class="page-header">
+          <div class="page-header-info">
+            <h1>👥 Clientes</h1>
+            <p>Gerencie sua base de clientes</p>
+          </div>
+        </div>
+        <div id="clientesTable"></div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { initAuth, requireAuth, isAdmin } from '/js/auth.js';
+    import { db, collection, addDoc, getDocs, updateDoc, deleteDoc, doc, onSnapshot, serverTimestamp } from '/js/firebase-config.js';
+    import { renderSidebar, renderTopbar, renderDataTable, showModal, showToast, showConfirm, buildForm, getFormData } from '/js/components.js';
+    import { formatDate, formatPhone, maskPhone, ICONS, validateRequired } from '/js/utils.js';
+
+    initAuth();
+
+    (async () => {
+      const userData = await requireAuth();
+      renderSidebar('clientes');
+      renderTopbar({ title: 'Clientes', subtitle: 'Cadastro e gestão', user: userData });
+
+      let clientes = [];
+      let tableInstance = null;
+
+      // Formulário do cliente
+      const formFields = [
+        { name: 'nome', label: 'Nome completo', type: 'text', placeholder: 'Nome do cliente', required: true },
+        { name: 'telefone', label: 'Telefone', type: 'tel', placeholder: '(00) 00000-0000', required: true },
+        { type: 'row', fields: [
+          { name: 'propriedade', label: 'Propriedade / Fazenda', type: 'text', placeholder: 'Nome da propriedade' },
+          { name: 'cidade', label: 'Cidade', type: 'text', placeholder: 'Cidade' }
+        ]},
+        { name: 'observacoes', label: 'Observações', type: 'textarea', placeholder: 'Anotações sobre o cliente...' }
+      ];
+
+      function openClienteForm(cliente = null) {
+        const isEdit = !!cliente;
+        const fields = formFields.map(f => {
+          if (f.type === 'row') {
+            return { ...f, fields: f.fields.map(ff => ({ ...ff, value: cliente?.[ff.name] || '' })) };
+          }
+          return { ...f, value: cliente?.[f.name] || '' };
+        });
+
+        const { element, close, body } = showModal({
+          title: isEdit ? 'Editar Cliente' : 'Novo Cliente',
+          content: `<form id="clienteForm">${buildForm(fields)}</form>`,
+          footer: `
+            <button class="btn btn-secondary" id="cancelBtn">Cancelar</button>
+            <button class="btn btn-primary" id="saveBtn">${isEdit ? 'Salvar' : 'Cadastrar'}</button>
+          `
+        });
+
+        // Máscara de telefone
+        const phoneInput = element.querySelector('#telefone');
+        if (phoneInput) {
+          phoneInput.addEventListener('input', (e) => {
+            e.target.value = maskPhone(e.target.value);
+          });
+        }
+
+        element.querySelector('#cancelBtn').addEventListener('click', close);
+        element.querySelector('#saveBtn').addEventListener('click', async () => {
+          const data = getFormData(element.querySelector('#clienteForm'));
+          
+          const validation = validateRequired({ Nome: data.nome, Telefone: data.telefone });
+          if (!validation.valid) {
+            showToast(validation.errors[0], 'error');
+            return;
+          }
+
+          try {
+            if (isEdit) {
+              await updateDoc(doc(db, 'clientes', cliente.id), data);
+              showToast('Cliente atualizado com sucesso!', 'success');
+            } else {
+              data.created_at = serverTimestamp();
+              await addDoc(collection(db, 'clientes'), data);
+              showToast('Cliente cadastrado com sucesso!', 'success');
+            }
+            close();
+          } catch (error) {
+            showToast('Erro: ' + error.message, 'error');
+          }
+        });
+      }
+
+      // Listener em tempo real
+      onSnapshot(collection(db, 'clientes'), (snapshot) => {
+        clientes = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        clientes.sort((a, b) => (a.nome || '').localeCompare(b.nome || ''));
+        
+        if (tableInstance) {
+          tableInstance.updateData(clientes);
+        } else {
+          tableInstance = renderDataTable({
+            containerId: 'clientesTable',
+            title: 'Clientes',
+            columns: [
+              { key: 'nome', label: 'Nome', render: (v) => `<span style="font-weight:600;color:var(--text-primary)">${v || '—'}</span>` },
+              { key: 'telefone', label: 'Telefone', render: (v) => formatPhone(v) },
+              { key: 'propriedade', label: 'Propriedade' },
+              { key: 'cidade', label: 'Cidade' },
+              { key: 'created_at', label: 'Cadastro', render: (v) => formatDate(v) }
+            ],
+            data: clientes,
+            searchFields: ['nome', 'telefone', 'propriedade', 'cidade'],
+            onAdd: () => openClienteForm(),
+            addLabel: 'Novo Cliente',
+            emptyMessage: 'Nenhum cliente cadastrado',
+            emptyIcon: '👥',
+            actions: [
+              { id: 'edit', label: 'Editar', icon: ICONS.edit, handler: (item) => openClienteForm(item) },
+              { id: 'delete', label: 'Excluir', icon: ICONS.trash, adminOnly: true, handler: async (item) => {
+                const confirmed = await showConfirm({
+                  title: 'Excluir Cliente',
+                  message: `Tem certeza que deseja excluir <strong>${item.nome}</strong>? Esta ação não pode ser desfeita.`,
+                  type: 'danger',
+                  confirmText: 'Excluir'
+                });
+                if (confirmed) {
+                  try {
+                    await deleteDoc(doc(db, 'clientes', item.id));
+                    showToast('Cliente excluído', 'success');
+                  } catch (error) {
+                    showToast('Erro: ' + error.message, 'error');
+                  }
+                }
+              }}
+            ]
+          });
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

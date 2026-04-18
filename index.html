@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sentinela Agro ERP</title>
+  <meta name="description" content="Sentinela Agro ERP - Sistema de gestão agropecuária" />
+  <meta name="theme-color" content="#0a0f1a" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌿</text></svg>" />
+</head>
+<body>
+  <div style="display:flex;align-items:center;justify-content:center;min-height:100vh;background:#0a0f1a">
+    <div style="border:4px solid #1e293b;border-top-color:#22c55e;width:48px;height:48px;border-radius:50%;animation:spin 0.8s linear infinite"></div>
+  </div>
+  <style>
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+  <script type="module">
+    import { auth, onAuthStateChanged } from '/js/firebase-config.js';
+    onAuthStateChanged(auth, (user) => {
+      window.location.href = user ? '/dashboard.html' : '/login.html';
+    });
+  </script>
+</body>
+</html>

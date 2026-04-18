@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard — Sentinela Agro ERP</title>
+  <meta name="description" content="Dashboard do Sentinela Agro ERP com métricas e visão geral." />
+  <meta name="theme-color" content="#0a0f1a" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌿</text></svg>" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/css/styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <div class="app-layout">
+    <div class="main-content" id="mainContent">
+      <div class="page-content" id="pageContent">
+        <!-- Loading skeleton -->
+        <div id="loadingState">
+          <div class="metrics-grid">
+            <div class="skeleton skeleton-card"></div>
+            <div class="skeleton skeleton-card"></div>
+            <div class="skeleton skeleton-card"></div>
+            <div class="skeleton skeleton-card"></div>
+          </div>
+          <div class="skeleton" style="height:300px;margin-top:20px"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { initAuth, requireAuth, getCurrentUserData } from '/js/auth.js';
+    import { db, collection, getDocs, query, where, orderBy, limit, Timestamp } from '/js/firebase-config.js';
+    import { renderSidebar, renderTopbar, renderMetricCard } from '/js/components.js';
+    import { formatCurrency, formatDate, formatDateTime, formatRelativeDate, ICONS, ENUM_LABELS, getStockStatusBadge } from '/js/utils.js';
+
+    initAuth();
+
+    (async () => {
+      const userData = await requireAuth();
+      
+      // Renderiza layout
+      renderSidebar('dashboard');
+      renderTopbar({ title: 'Dashboard', subtitle: 'Visão geral do sistema', user: userData });
+
+      // Carrega dados
+      try {
+        const [vendasSnap, produtosSnap, clientesSnap, financeiroSnap] = await Promise.all([
+          getDocs(collection(db, 'vendas')),
+          getDocs(collection(db, 'produtos')),
+          getDocs(collection(db, 'clientes')),
+          getDocs(collection(db, 'financeiro'))
+        ]);
+
+        const vendas = vendasSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        const produtos = produtosSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        const clientes = clientesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        const financeiro = financeiroSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+        // Métricas
+        const vendasConcluidas = vendas.filter(v => v.status === 'concluida');
+        const faturamentoTotal = vendasConcluidas.reduce((sum, v) => sum + (v.total || 0), 0);
+        
+        const now = new Date();
+        const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const vendasMes = vendasConcluidas.filter(v => {
+          const d = v.created_at?.toDate ? v.created_at.toDate() : new Date(v.created_at);
+          return d >= firstOfMonth;
+        });
+        const faturamentoMensal = vendasMes.reduce((sum, v) => sum + (v.total || 0), 0);
+
+        const produtosBaixoEstoque = produtos.filter(p => p.ativo !== false && p.estoque <= (p.estoque_minimo || 0));
+        const finPendente = financeiro.filter(f => f.status === 'pendente' && f.tipo === 'receber');
+        const totalPendente = finPendente.reduce((sum, f) => sum + (f.valor || 0), 0);
+
+        // Renderiza dashboard
+        const pageContent = document.getElementById('pageContent');
+        pageContent.innerHTML = `
+          <div class="page-header">
+            <div class="page-header-info">
+              <h1>👋 Olá, ${userData?.name || 'Usuário'}!</h1>
+              <p>Aqui está o resumo do seu negócio</p>
+            </div>
+          </div>
+
+          <!-- Métricas -->
+          <div class="metrics-grid">
+            ${renderMetricCard({ 
+              icon: '💰', iconColor: 'green', 
+              value: formatCurrency(faturamentoTotal), 
+              label: 'Faturamento Total',
+              glowClass: 'green-glow'
+            })}
+            ${renderMetricCard({ 
+              icon: '📈', iconColor: 'blue', 
+              value: formatCurrency(faturamentoMensal), 
+              label: 'Faturamento Mensal',
+              trend: 'up', trendValue: 'Este mês',
+              glowClass: 'blue-glow'
+            })}
+            ${renderMetricCard({ 
+              icon: '👥', iconColor: 'purple', 
+              value: clientes.length.toString(), 
+              label: 'Total de Clientes',
+              glowClass: ''
+            })}
+            ${renderMetricCard({ 
+              icon: '📦', iconColor: produtosBaixoEstoque.length > 0 ? 'amber' : 'green', 
+              value: produtos.filter(p => p.ativo !== false).length.toString(), 
+              label: 'Produtos Ativos',
+              trend: produtosBaixoEstoque.length > 0 ? 'down' : null,
+              trendValue: produtosBaixoEstoque.length > 0 ? `${produtosBaixoEstoque.length} em baixa` : null,
+              glowClass: produtosBaixoEstoque.length > 0 ? 'amber-glow' : 'green-glow'
+            })}
+          </div>
+
+          <!-- Linha 2: Gráficos -->
+          <div class="charts-grid">
+            <div class="card">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+                <h3 style="font-weight:700;font-size:16px">Vendas Recentes</h3>
+                <span class="badge badge-info">${vendasMes.length} este mês</span>
+              </div>
+              <div class="chart-container">
+                <canvas id="vendasChart"></canvas>
+              </div>
+            </div>
+            <div class="card">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+                <h3 style="font-weight:700;font-size:16px">Produtos por Categoria</h3>
+              </div>
+              <div class="chart-container">
+                <canvas id="categoriasChart"></canvas>
+              </div>
+            </div>
+          </div>
+
+          <!-- Linha 3: Alertas e Vendas Recentes -->
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:28px">
+            <!-- Alertas de estoque -->
+            <div class="card">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+                <h3 style="font-weight:700;font-size:16px">⚠️ Estoque Baixo</h3>
+                ${produtosBaixoEstoque.length > 0 ? `<span class="badge badge-warning">${produtosBaixoEstoque.length}</span>` : ''}
+              </div>
+              ${produtosBaixoEstoque.length === 0 ? `
+                <div style="text-align:center;padding:32px 0;color:var(--text-muted)">
+                  <div style="font-size:32px;margin-bottom:8px">✅</div>
+                  <p>Todos os estoques estão OK!</p>
+                </div>
+              ` : `
+                <div style="display:flex;flex-direction:column;gap:8px;max-height:240px;overflow-y:auto">
+                  ${produtosBaixoEstoque.slice(0, 8).map(p => `
+                    <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--bg-tertiary);border-radius:var(--radius-md)">
+                      <div>
+                        <div style="font-weight:600;font-size:14px">${p.nome}</div>
+                        <div style="font-size:12px;color:var(--text-muted)">${ENUM_LABELS.tipo_produto[p.tipo] || p.tipo}</div>
+                      </div>
+                      <div style="text-align:right">
+                        <span class="badge ${p.estoque <= 0 ? 'badge-danger' : 'badge-warning'}">${p.estoque} ${p.unidade || ''}</span>
+                        <div style="font-size:11px;color:var(--text-muted);margin-top:4px">Mín: ${p.estoque_minimo}</div>
+                      </div>
+                    </div>
+                  `).join('')}
+                </div>
+              `}
+            </div>
+
+            <!-- Contas a receber -->
+            <div class="card">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+                <h3 style="font-weight:700;font-size:16px">💳 Contas a Receber</h3>
+                ${totalPendente > 0 ? `<span class="badge badge-warning">${formatCurrency(totalPendente)}</span>` : ''}
+              </div>
+              ${finPendente.length === 0 ? `
+                <div style="text-align:center;padding:32px 0;color:var(--text-muted)">
+                  <div style="font-size:32px;margin-bottom:8px">🎉</div>
+                  <p>Nenhuma pendência!</p>
+                </div>
+              ` : `
+                <div style="display:flex;flex-direction:column;gap:8px;max-height:240px;overflow-y:auto">
+                  ${finPendente.slice(0, 8).map(f => `
+                    <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--bg-tertiary);border-radius:var(--radius-md)">
+                      <div>
+                        <div style="font-weight:600;font-size:14px">${f.descricao || 'Venda'}</div>
+                        <div style="font-size:12px;color:var(--text-muted)">${f.data_vencimento ? formatDate(f.data_vencimento) : '—'}</div>
+                      </div>
+                      <span style="font-weight:700;color:var(--accent-amber)">${formatCurrency(f.valor)}</span>
+                    </div>
+                  `).join('')}
+                </div>
+              `}
+            </div>
+          </div>
+
+          <!-- Últimas vendas -->
+          <div class="card" style="margin-bottom:28px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+              <h3 style="font-weight:700;font-size:16px">🛒 Últimas Vendas</h3>
+              <a href="/vendas.html" class="btn btn-ghost btn-sm">Ver todas →</a>
+            </div>
+            ${vendas.length === 0 ? `
+              <div style="text-align:center;padding:32px 0;color:var(--text-muted)">
+                <p>Nenhuma venda registrada ainda</p>
+              </div>
+            ` : `
+              <div style="overflow-x:auto">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Data</th>
+                      <th>Cliente</th>
+                      <th>Itens</th>
+                      <th>Total</th>
+                      <th>Pagamento</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${vendas
+                      .sort((a, b) => {
+                        const da = a.created_at?.toDate ? a.created_at.toDate() : new Date(a.created_at || 0);
+                        const db2 = b.created_at?.toDate ? b.created_at.toDate() : new Date(b.created_at || 0);
+                        return db2 - da;
+                      })
+                      .slice(0, 8)
+                      .map(v => {
+                        const cliente = clientes.find(c => c.id === v.cliente_id);
+                        return `
+                          <tr>
+                            <td>${formatRelativeDate(v.created_at)}</td>
+                            <td style="font-weight:500;color:var(--text-primary)">${cliente?.nome || 'Cliente removido'}</td>
+                            <td>${v.itens?.length || 0} itens</td>
+                            <td style="font-weight:600;color:var(--accent-green)">${formatCurrency(v.total)}</td>
+                            <td><span class="badge badge-neutral">${ENUM_LABELS.forma_pagamento[v.forma_pagamento] || v.forma_pagamento}</span></td>
+                            <td><span class="badge ${v.status === 'concluida' ? 'badge-success' : 'badge-danger'}">${ENUM_LABELS.status_venda[v.status] || v.status}</span></td>
+                          </tr>
+                        `;
+                      }).join('')}
+                  </tbody>
+                </table>
+              </div>
+            `}
+          </div>
+        `;
+
+        // ===== GRÁFICOS =====
+        // Vendas por dia (últimos 7 dias)
+        const last7days = [];
+        for (let i = 6; i >= 0; i--) {
+          const d = new Date();
+          d.setDate(d.getDate() - i);
+          d.setHours(0, 0, 0, 0);
+          last7days.push(d);
+        }
+
+        const vendasPorDia = last7days.map(day => {
+          const nextDay = new Date(day);
+          nextDay.setDate(nextDay.getDate() + 1);
+          return vendasConcluidas.filter(v => {
+            const vd = v.created_at?.toDate ? v.created_at.toDate() : new Date(v.created_at || 0);
+            return vd >= day && vd < nextDay;
+          }).reduce((sum, v) => sum + (v.total || 0), 0);
+        });
+
+        const chartStyle = {
+          backgroundColor: 'rgba(34, 197, 94, 0.1)',
+          borderColor: '#22c55e',
+          pointBackgroundColor: '#22c55e',
+          pointBorderColor: '#0a0f1a',
+          pointBorderWidth: 2,
+          pointRadius: 4,
+          tension: 0.4,
+          fill: true
+        };
+
+        new Chart(document.getElementById('vendasChart'), {
+          type: 'line',
+          data: {
+            labels: last7days.map(d => d.toLocaleDateString('pt-BR', { weekday: 'short', day: 'numeric' })),
+            datasets: [{
+              label: 'Faturamento',
+              data: vendasPorDia,
+              ...chartStyle
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                callbacks: {
+                  label: (ctx) => formatCurrency(ctx.parsed.y)
+                }
+              }
+            },
+            scales: {
+              x: {
+                grid: { color: 'rgba(255,255,255,0.05)' },
+                ticks: { color: '#64748b', font: { size: 11 } }
+              },
+              y: {
+                grid: { color: 'rgba(255,255,255,0.05)' },
+                ticks: { 
+                  color: '#64748b', 
+                  font: { size: 11 },
+                  callback: (v) => formatCurrency(v)
+                }
+              }
+            }
+          }
+        });
+
+        // Categorias de produtos
+        const categorias = {};
+        produtos.forEach(p => {
+          const tipo = p.tipo || 'outros';
+          categorias[tipo] = (categorias[tipo] || 0) + 1;
+        });
+
+        const catColors = ['#22c55e', '#3b82f6', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4'];
+        
+        new Chart(document.getElementById('categoriasChart'), {
+          type: 'doughnut',
+          data: {
+            labels: Object.keys(categorias).map(k => ENUM_LABELS.tipo_produto[k] || k),
+            datasets: [{
+              data: Object.values(categorias),
+              backgroundColor: catColors.slice(0, Object.keys(categorias).length),
+              borderWidth: 0,
+              spacing: 4
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                position: 'bottom',
+                labels: { color: '#94a3b8', padding: 16, usePointStyle: true, pointStyle: 'circle' }
+              }
+            },
+            cutout: '65%'
+          }
+        });
+
+      } catch (error) {
+        console.error('Erro ao carregar dashboard:', error);
+        document.getElementById('pageContent').innerHTML = `
+          <div class="empty-state">
+            <div class="empty-state-icon">❌</div>
+            <h3>Erro ao carregar dados</h3>
+            <p>${error.message}</p>
+            <button class="btn btn-primary" onclick="location.reload()">Tentar novamente</button>
+          </div>
+        `;
+      }
+    })();
+  </script>
+</body>
+</html>

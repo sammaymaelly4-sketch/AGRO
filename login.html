@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Sentinela Agro ERP - Sistema de gestão para loja agro. Controle de vendas, estoque e clientes." />
+  <title>Login — Sentinela Agro ERP</title>
+  <link rel="manifest" href="/manifest.json" />
+  <meta name="theme-color" content="#0a0f1a" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌿</text></svg>" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/css/styles.css" />
+  <style>
+    .login-features {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      margin-top: 36px;
+    }
+    .login-feature {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--text-secondary);
+      font-size: 14px;
+    }
+    .login-feature-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: var(--radius-md);
+      background: rgba(34, 197, 94, 0.1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      flex-shrink: 0;
+    }
+    .password-toggle {
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 4px;
+    }
+    .login-loading {
+      display: none;
+      position: absolute;
+      inset: 0;
+      background: rgba(10, 15, 26, 0.8);
+      border-radius: var(--radius-md);
+      align-items: center;
+      justify-content: center;
+    }
+    .login-loading.active {
+      display: flex;
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 10px;
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all 200ms;
+      font-family: inherit;
+    }
+    .tab-btn.active {
+      color: var(--accent-green);
+      border-bottom-color: var(--accent-green);
+    }
+  </style>
+</head>
+<body>
+  <div class="login-container">
+    <!-- Lado da marca -->
+    <div class="login-brand">
+      <div class="login-brand-content">
+        <div class="login-brand-logo">🌿</div>
+        <h1>Sentinela <span>Agro</span></h1>
+        <p>Sistema completo de gestão para sua loja agropecuária. Controle vendas, estoque, clientes e financeiro em um só lugar.</p>
+        
+        <div class="login-features">
+          <div class="login-feature">
+            <div class="login-feature-icon">📊</div>
+            <span>Dashboard com métricas em tempo real</span>
+          </div>
+          <div class="login-feature">
+            <div class="login-feature-icon">📦</div>
+            <span>Controle de estoque inteligente</span>
+          </div>
+          <div class="login-feature">
+            <div class="login-feature-icon">💰</div>
+            <span>Gestão financeira completa</span>
+          </div>
+          <div class="login-feature">
+            <div class="login-feature-icon">🛒</div>
+            <span>Vendas rápidas e organizadas</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Lado do formulário -->
+    <div class="login-form-side">
+      <h2 id="formTitle">Bem-vindo de volta</h2>
+      <p class="login-subtitle" id="formSubtitle">Entre com suas credenciais para acessar o sistema</p>
+
+      <div class="login-form">
+        <!-- Tabs Login / Registro -->
+        <div style="display:flex;margin-bottom:28px;border-bottom:1px solid var(--border-color)">
+          <button class="tab-btn active" id="tabLogin" onclick="switchTab('login')">Entrar</button>
+          <button class="tab-btn" id="tabRegister" onclick="switchTab('register')">Criar conta</button>
+        </div>
+
+        <form id="loginForm" onsubmit="handleSubmit(event)">
+          <!-- Nome (só aparece no registro) -->
+          <div class="form-group" id="nameGroup" style="display:none">
+            <label class="form-label" for="name">Nome completo</label>
+            <input class="form-input" type="text" id="name" placeholder="Seu nome" />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="email">Email</label>
+            <input class="form-input" type="email" id="email" placeholder="seu@email.com" required />
+          </div>
+          
+          <div class="form-group">
+            <label class="form-label" for="password">Senha</label>
+            <div style="position:relative">
+              <input class="form-input" type="password" id="password" placeholder="••••••••" required minlength="6" style="padding-right:40px" />
+              <button type="button" class="password-toggle" onclick="togglePassword()">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div id="errorMsg" style="display:none;padding:10px 14px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.2);border-radius:var(--radius-md);color:var(--accent-red);font-size:13px;margin-bottom:16px"></div>
+
+          <button type="submit" class="btn btn-primary btn-lg" id="submitBtn" style="width:100%;justify-content:center;position:relative">
+            <span id="btnText">Entrar</span>
+            <div class="login-loading" id="btnLoading">
+              <div class="spinner"></div>
+            </div>
+          </button>
+        </form>
+
+        <div class="login-divider">
+          <span>Sentinela Agro ERP v1.0</span>
+        </div>
+
+        <p style="text-align:center;font-size:12px;color:var(--text-muted)">
+          Ao entrar, você concorda com os termos de uso do sistema.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { initAuth, signIn, signUp, getCurrentUser } from '/js/auth.js';
+    import { auth, onAuthStateChanged } from '/js/firebase-config.js';
+
+    // Se já está logado, redireciona
+    onAuthStateChanged(auth, (user) => {
+      if (user) {
+        window.location.href = '/dashboard.html';
+      }
+    });
+
+    let mode = 'login';
+
+    window.switchTab = function(tab) {
+      mode = tab;
+      const isLogin = tab === 'login';
+      
+      document.getElementById('tabLogin').classList.toggle('active', isLogin);
+      document.getElementById('tabRegister').classList.toggle('active', !isLogin);
+      document.getElementById('nameGroup').style.display = isLogin ? 'none' : 'block';
+      document.getElementById('formTitle').textContent = isLogin ? 'Bem-vindo de volta' : 'Criar nova conta';
+      document.getElementById('formSubtitle').textContent = isLogin 
+        ? 'Entre com suas credenciais para acessar o sistema'
+        : 'Preencha os dados para criar sua conta';
+      document.getElementById('btnText').textContent = isLogin ? 'Entrar' : 'Criar conta';
+      document.getElementById('errorMsg').style.display = 'none';
+    };
+
+    window.togglePassword = function() {
+      const pwd = document.getElementById('password');
+      pwd.type = pwd.type === 'password' ? 'text' : 'password';
+    };
+
+    window.handleSubmit = async function(e) {
+      e.preventDefault();
+      
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+      const name = document.getElementById('name')?.value?.trim();
+      const errorEl = document.getElementById('errorMsg');
+      const loadingEl = document.getElementById('btnLoading');
+
+      errorEl.style.display = 'none';
+      loadingEl.classList.add('active');
+
+      let result;
+      if (mode === 'login') {
+        result = await signIn(email, password);
+      } else {
+        if (!name) {
+          errorEl.textContent = 'Por favor, informe seu nome';
+          errorEl.style.display = 'block';
+          loadingEl.classList.remove('active');
+          return;
+        }
+        result = await signUp(email, password, name);
+      }
+
+      if (result.success) {
+        window.location.href = '/dashboard.html';
+      } else {
+        errorEl.textContent = result.error;
+        errorEl.style.display = 'block';
+        loadingEl.classList.remove('active');
+      }
+    };
+
+    // Init
+    initAuth();
+  </script>
+</body>
+</html>

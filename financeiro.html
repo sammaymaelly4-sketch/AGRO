@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Financeiro — Sentinela Agro ERP</title>
+  <meta name="description" content="Gestão financeira do Sentinela Agro ERP" />
+  <meta name="theme-color" content="#0a0f1a" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌿</text></svg>" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <div class="app-layout">
+    <div class="main-content" id="mainContent">
+      <div class="page-content">
+        <div class="page-header">
+          <div class="page-header-info">
+            <h1>💰 Financeiro</h1>
+            <p>Contas a receber e a pagar</p>
+          </div>
+          <div class="filter-tabs" id="filterTabs">
+            <button class="filter-tab active" data-filter="todos">Todos</button>
+            <button class="filter-tab" data-filter="receber">A Receber</button>
+            <button class="filter-tab" data-filter="pagar">A Pagar</button>
+            <button class="filter-tab" data-filter="pendente">Pendentes</button>
+            <button class="filter-tab" data-filter="pago">Pagos</button>
+          </div>
+        </div>
+
+        <div class="metrics-grid" id="financeiroMetrics"></div>
+        <div id="financeiroTable"></div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { initAuth, requireAuth, isAdmin } from '/js/auth.js';
+    import { db, collection, addDoc, getDocs, updateDoc, deleteDoc, doc, onSnapshot, serverTimestamp } from '/js/firebase-config.js';
+    import { renderSidebar, renderTopbar, renderDataTable, renderMetricCard, showModal, showToast, showConfirm, buildForm, getFormData } from '/js/components.js';
+    import { formatCurrency, formatDate, ICONS, ENUM_LABELS, validateRequired } from '/js/utils.js';
+
+    initAuth();
+
+    (async () => {
+      const userData = await requireAuth();
+      renderSidebar('financeiro');
+      renderTopbar({ title: 'Financeiro', subtitle: 'Contas e lançamentos', user: userData });
+
+      let registros = [];
+      let activeFilter = 'todos';
+
+      // Adicionar registro manual
+      function openNovoRegistro() {
+        const fields = [
+          { type: 'row', fields: [
+            { name: 'tipo', label: 'Tipo', type: 'select', required: true, options: [
+              { value: 'receber', label: 'A Receber' },
+              { value: 'pagar', label: 'A Pagar' }
+            ]},
+            { name: 'status', label: 'Status', type: 'select', required: true, options: [
+              { value: 'pendente', label: 'Pendente' },
+              { value: 'pago', label: 'Pago' }
+            ]}
+          ]},
+          { name: 'descricao', label: 'Descrição', type: 'text', required: true, placeholder: 'Ex: Compra de ração, Pagamento fornecedor...' },
+          { type: 'row', fields: [
+            { name: 'valor', label: 'Valor (R$)', type: 'number', step: '0.01', min: 0.01, required: true },
+            { name: 'data_vencimento', label: 'Data de Vencimento', type: 'date' }
+          ]}
+        ];
+
+        const { element, close } = showModal({
+          title: '➕ Novo Lançamento',
+          content: `<form id="finForm">${buildForm(fields)}</form>`,
+          footer: `
+            <button class="btn btn-secondary" id="cancelBtn">Cancelar</button>
+            <button class="btn btn-primary" id="saveBtn">Salvar</button>
+          `
+        });
+
+        element.querySelector('#cancelBtn').addEventListener('click', close);
+        element.querySelector('#saveBtn').addEventListener('click', async () => {
+          const data = getFormData(element.querySelector('#finForm'));
+          
+          const validation = validateRequired({ Tipo: data.tipo, Descrição: data.descricao, Valor: data.valor, Status: data.status });
+          if (!validation.valid) {
+            showToast(validation.errors[0], 'error');
+            return;
+          }
+
+          data.valor = parseFloat(data.valor);
+          data.data_vencimento = data.data_vencimento ? new Date(data.data_vencimento + 'T00:00:00') : null;
+          data.venda_id = null;
+          data.created_at = serverTimestamp();
+
+          try {
+            await addDoc(collection(db, 'financeiro'), data);
+            showToast('Lançamento criado!', 'success');
+            close();
+          } catch (error) {
+            showToast('Erro: ' + error.message, 'error');
+          }
+        });
+      }
+
+      function getFilteredData() {
+        return registros.filter(r => {
+          if (activeFilter === 'todos') return true;
+          if (activeFilter === 'receber') return r.tipo === 'receber';
+          if (activeFilter === 'pagar') return r.tipo === 'pagar';
+          if (activeFilter === 'pendente') return r.status === 'pendente';
+          if (activeFilter === 'pago') return r.status === 'pago';
+          return true;
+        });
+      }
+
+      function renderFinanceiro() {
+        // Métricas
+        const aReceber = registros.filter(r => r.tipo === 'receber' && r.status === 'pendente');
+        const totalReceber = aReceber.reduce((s, r) => s + (r.valor || 0), 0);
+        
+        const aPagar = registros.filter(r => r.tipo === 'pagar' && r.status === 'pendente');
+        const totalPagar = aPagar.reduce((s, r) => s + (r.valor || 0), 0);
+
+        const recebido = registros.filter(r => r.tipo === 'receber' && r.status === 'pago');
+        const totalRecebido = recebido.reduce((s, r) => s + (r.valor || 0), 0);
+
+        const vencidos = registros.filter(r => {
+          if (r.status !== 'pendente' || !r.data_vencimento) return false;
+          const dv = r.data_vencimento.toDate ? r.data_vencimento.toDate() : new Date(r.data_vencimento);
+          return dv < new Date();
+        });
+        const totalVencido = vencidos.reduce((s, r) => s + (r.valor || 0), 0);
+
+        document.getElementById('financeiroMetrics').innerHTML = `
+          ${renderMetricCard({ icon: '📥', iconColor: 'green', value: formatCurrency(totalReceber), label: 'A Receber', trend: aReceber.length > 0 ? 'up' : null, trendValue: `${aReceber.length} pendência(s)`, glowClass: 'green-glow' })}
+          ${renderMetricCard({ icon: '📤', iconColor: 'red', value: formatCurrency(totalPagar), label: 'A Pagar', trend: aPagar.length > 0 ? 'down' : null, trendValue: `${aPagar.length} pendência(s)`, glowClass: aPagar.length > 0 ? 'red-glow' : '' })}
+          ${renderMetricCard({ icon: '✅', iconColor: 'blue', value: formatCurrency(totalRecebido), label: 'Total Recebido', glowClass: 'blue-glow' })}
+          ${renderMetricCard({ icon: '🔴', iconColor: 'amber', value: formatCurrency(totalVencido), label: 'Vencidos', trend: vencidos.length > 0 ? 'down' : null, trendValue: vencidos.length > 0 ? `${vencidos.length} vencido(s)` : null, glowClass: vencidos.length > 0 ? 'amber-glow' : '' })}
+        `;
+
+        const data = getFilteredData();
+
+        renderDataTable({
+          containerId: 'financeiroTable',
+          title: 'Lançamentos',
+          columns: [
+            { key: 'tipo', label: 'Tipo', render: (v) => {
+              const icon = v === 'receber' ? '📥' : '📤';
+              return `<span class="badge ${v === 'receber' ? 'badge-success' : 'badge-danger'}">${icon} ${ENUM_LABELS.tipo_financeiro[v] || v}</span>`;
+            }},
+            { key: 'descricao', label: 'Descrição', render: (v) => `<span style="font-weight:500;color:var(--text-primary)">${v || '—'}</span>` },
+            { key: 'valor', label: 'Valor', render: (v, row) => {
+              const color = row.tipo === 'receber' ? 'var(--accent-green)' : 'var(--accent-red)';
+              return `<span style="font-weight:700;color:${color}">${formatCurrency(v)}</span>`;
+            }},
+            { key: 'data_vencimento', label: 'Vencimento', render: (v) => {
+              if (!v) return '—';
+              const d = v.toDate ? v.toDate() : new Date(v);
+              const isOverdue = d < new Date();
+              return `<span style="${isOverdue ? 'color:var(--accent-red);font-weight:600' : ''}">${formatDate(v)}</span>`;
+            }},
+            { key: 'status', label: 'Status', render: (v) => {
+              const badges = { pendente: 'badge-warning', pago: 'badge-success', cancelado: 'badge-neutral' };
+              return `<span class="badge ${badges[v] || 'badge-neutral'}">${ENUM_LABELS.status_financeiro[v] || v}</span>`;
+            }}
+          ],
+          data: data,
+          searchFields: ['descricao'],
+          onAdd: () => openNovoRegistro(),
+          addLabel: 'Novo Lançamento',
+          emptyMessage: 'Nenhum lançamento financeiro',
+          emptyIcon: '💰',
+          actions: [
+            { id: 'pay', label: 'Marcar como pago', icon: ICONS.check, handler: async (item) => {
+              if (item.status === 'pago') {
+                showToast('Este lançamento já está pago', 'info');
+                return;
+              }
+              const confirmed = await showConfirm({
+                title: 'Confirmar Pagamento',
+                message: `Marcar <strong>${item.descricao}</strong> (${formatCurrency(item.valor)}) como pago?`,
+                confirmText: 'Confirmar'
+              });
+              if (confirmed) {
+                try {
+                  await updateDoc(doc(db, 'financeiro', item.id), { status: 'pago' });
+                  showToast('Marcado como pago!', 'success');
+                } catch (error) {
+                  showToast('Erro: ' + error.message, 'error');
+                }
+              }
+            }},
+            { id: 'delete', label: 'Excluir', icon: ICONS.trash, adminOnly: true, handler: async (item) => {
+              if (item.venda_id) {
+                showToast('Este lançamento foi gerado por uma venda. Cancele a venda para remover.', 'warning');
+                return;
+              }
+              const confirmed = await showConfirm({
+                title: 'Excluir Lançamento',
+                message: `Excluir <strong>${item.descricao}</strong>?`,
+                type: 'danger',
+                confirmText: 'Excluir'
+              });
+              if (confirmed) {
+                try {
+                  await deleteDoc(doc(db, 'financeiro', item.id));
+                  showToast('Lançamento excluído', 'success');
+                } catch (error) {
+                  showToast('Erro: ' + error.message, 'error');
+                }
+              }
+            }}
+          ]
+        });
+      }
+
+      // Filter tabs
+      document.querySelectorAll('.filter-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+          document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
+          tab.classList.add('active');
+          activeFilter = tab.dataset.filter;
+          renderFinanceiro();
+        });
+      });
+
+      // Listener em tempo real
+      onSnapshot(collection(db, 'financeiro'), (snapshot) => {
+        registros = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        registros.sort((a, b) => {
+          const da = a.created_at?.toDate ? a.created_at.toDate() : new Date(a.created_at || 0);
+          const db2 = b.created_at?.toDate ? b.created_at.toDate() : new Date(b.created_at || 0);
+          return db2 - da;
+        });
+        renderFinanceiro();
+      });
+    })();
+  </script>
+</body>
+</html>

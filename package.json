@@ -1,0 +1,11 @@
+{
+  "name": "sentinela-agro-erp",
+  "version": "1.0.0",
+  "description": "Sentinela Agro ERP - Sistema de gestão agropecuária",
+  "scripts": {
+    "dev": "npx serve -l 3000",
+    "start": "npx serve -l 3000"
+  },
+  "keywords": ["erp", "agro", "firebase"],
+  "license": "MIT"
+}

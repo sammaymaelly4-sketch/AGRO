@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vendas — Sentinela Agro ERP</title>
+  <meta name="description" content="Registro de vendas do Sentinela Agro ERP" />
+  <meta name="theme-color" content="#0a0f1a" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌿</text></svg>" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/css/styles.css" />
+  <style>
+    .sale-item {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 16px; background: var(--bg-tertiary); border-radius: var(--radius-md); margin-bottom: 8px;
+    }
+    .sale-item-info { flex: 1; }
+    .sale-item-name { font-weight: 600; font-size: 14px; color: var(--text-primary); }
+    .sale-item-detail { font-size: 12px; color: var(--text-muted); }
+    .sale-item-qty { display: flex; align-items: center; gap: 8px; }
+    .sale-item-qty input { width: 70px; text-align: center; }
+    .sale-item-total { font-weight: 700; color: var(--accent-green); min-width: 100px; text-align: right; }
+    .sale-item-remove { cursor: pointer; color: var(--accent-red); background: none; border: none; padding: 4px; }
+    .sale-summary {
+      padding: 16px; background: rgba(34,197,94,0.05); border: 1px solid rgba(34,197,94,0.15);
+      border-radius: var(--radius-md); margin-top: 16px;
+    }
+    .sale-summary-row {
+      display: flex; justify-content: space-between; padding: 6px 0;
+      font-size: 14px; color: var(--text-secondary);
+    }
+    .sale-summary-total {
+      display: flex; justify-content: space-between; padding: 10px 0 0;
+      font-size: 20px; font-weight: 800; color: var(--accent-green);
+      border-top: 1px solid var(--border-color); margin-top: 8px;
+    }
+    .product-search-results {
+      position: absolute; top: 100%; left: 0; right: 0;
+      background: var(--bg-secondary); border: 1px solid var(--border-color);
+      border-radius: var(--radius-md); max-height: 200px; overflow-y: auto;
+      z-index: 10; display: none; box-shadow: var(--shadow-xl);
+    }
+    .product-search-results.show { display: block; }
+    .product-search-item {
+      padding: 10px 14px; cursor: pointer; display: flex; justify-content: space-between;
+      transition: background 150ms;
+    }
+    .product-search-item:hover { background: var(--bg-tertiary); }
+  </style>
+</head>
+<body>
+  <div class="app-layout">
+    <div class="main-content" id="mainContent">
+      <div class="page-content">
+        <div class="page-header">
+          <div class="page-header-info">
+            <h1>🛒 Vendas</h1>
+            <p>Registre e gerencie suas vendas</p>
+          </div>
+        </div>
+        <div id="vendasContent"></div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { initAuth, requireAuth, getCurrentUserData } from '/js/auth.js';
+    import { db, collection, addDoc, getDoc, getDocs, updateDoc, deleteDoc, doc, onSnapshot, serverTimestamp, writeBatch, runTransaction } from '/js/firebase-config.js';
+    import { renderSidebar, renderTopbar, renderDataTable, showModal, showToast, showConfirm, buildForm, getFormData } from '/js/components.js';
+    import { formatCurrency, formatDate, formatDateTime, ICONS, ENUM_LABELS, validateRequired } from '/js/utils.js';
+
+    initAuth();
+
+    (async () => {
+      const userData = await requireAuth();
+      renderSidebar('vendas');
+      renderTopbar({ title: 'Vendas', subtitle: 'Registro e histórico', user: userData });
+
+      let vendas = [];
+      let clientes = [];
+      let produtos = [];
+
+      // Carrega clientes e produtos
+      const [clientesSnap, produtosSnap] = await Promise.all([
+        getDocs(collection(db, 'clientes')),
+        getDocs(collection(db, 'produtos'))
+      ]);
+      clientes = clientesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      produtos = produtosSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => p.ativo !== false);
+
+      // === NOVA VENDA ===
+      function openNovaVenda() {
+        let selectedCliente = null;
+        let cartItems = []; // { produto, quantidade }
+
+        const { element, close } = showModal({
+          title: '🛒 Nova Venda',
+          size: 'lg',
+          content: `
+            <div id="vendaForm">
+              <!-- Seleção de cliente -->
+              <div class="form-group">
+                <label class="form-label">Cliente *</label>
+                <div style="position:relative">
+                  <input class="form-input" type="text" id="clienteSearch" placeholder="Buscar cliente por nome..." autocomplete="off" />
+                  <div class="product-search-results" id="clienteResults"></div>
+                </div>
+                <div id="clienteSelected" style="display:none;margin-top:8px;padding:10px 14px;background:var(--bg-tertiary);border-radius:var(--radius-md);display:none">
+                  <div style="display:flex;align-items:center;justify-content:space-between">
+                    <div>
+                      <span style="font-weight:600" id="clienteSelName"></span>
+                      <span style="font-size:12px;color:var(--text-muted);margin-left:8px" id="clienteSelCity"></span>
+                    </div>
+                    <button class="btn btn-ghost btn-sm" id="clearCliente">✕ Trocar</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Adicionar produtos -->
+              <div class="form-group">
+                <label class="form-label">Adicionar Produto</label>
+                <div style="position:relative">
+                  <input class="form-input" type="text" id="produtoSearch" placeholder="Buscar produto..." autocomplete="off" />
+                  <div class="product-search-results" id="produtoResults"></div>
+                </div>
+              </div>
+
+              <!-- Itens do carrinho -->
+              <div id="cartItems" style="margin-top:16px"></div>
+
+              <!-- Resumo -->
+              <div id="saleSummary" style="display:none"></div>
+
+              <!-- Forma de pagamento -->
+              <div class="form-group" style="margin-top:16px">
+                <label class="form-label">Forma de Pagamento *</label>
+                <select class="form-select" id="formaPagamento">
+                  <option value="">Selecione...</option>
+                  <option value="dinheiro">💵 Dinheiro</option>
+                  <option value="pix">📱 PIX</option>
+                  <option value="fiado">📝 Fiado</option>
+                </select>
+              </div>
+            </div>
+          `,
+          footer: `
+            <button class="btn btn-secondary" id="cancelVenda">Cancelar</button>
+            <button class="btn btn-primary" id="confirmarVenda">✅ Confirmar Venda</button>
+          `
+        });
+
+        // Busca de clientes
+        const clienteSearch = element.querySelector('#clienteSearch');
+        const clienteResults = element.querySelector('#clienteResults');
+
+        clienteSearch.addEventListener('input', () => {
+          const term = clienteSearch.value.toLowerCase();
+          if (term.length < 2) { clienteResults.classList.remove('show'); return; }
+          const filtered = clientes.filter(c => c.nome?.toLowerCase().includes(term));
+          if (filtered.length === 0) { clienteResults.classList.remove('show'); return; }
+          clienteResults.innerHTML = filtered.slice(0, 8).map(c => `
+            <div class="product-search-item" data-id="${c.id}">
+              <span style="font-weight:500">${c.nome}</span>
+              <span style="font-size:12px;color:var(--text-muted)">${c.cidade || ''}</span>
+            </div>
+          `).join('');
+          clienteResults.classList.add('show');
+          clienteResults.querySelectorAll('.product-search-item').forEach(item => {
+            item.addEventListener('click', () => {
+              selectedCliente = clientes.find(c => c.id === item.dataset.id);
+              clienteSearch.style.display = 'none';
+              element.querySelector('#clienteSelected').style.display = 'block';
+              element.querySelector('#clienteSelName').textContent = selectedCliente.nome;
+              element.querySelector('#clienteSelCity').textContent = selectedCliente.cidade || '';
+              clienteResults.classList.remove('show');
+            });
+          });
+        });
+
+        element.querySelector('#clearCliente')?.addEventListener('click', () => {
+          selectedCliente = null;
+          clienteSearch.style.display = 'block';
+          clienteSearch.value = '';
+          element.querySelector('#clienteSelected').style.display = 'none';
+        });
+
+        // Busca de produtos
+        const produtoSearch = element.querySelector('#produtoSearch');
+        const produtoResults = element.querySelector('#produtoResults');
+
+        produtoSearch.addEventListener('input', () => {
+          const term = produtoSearch.value.toLowerCase();
+          if (term.length < 2) { produtoResults.classList.remove('show'); return; }
+          const filtered = produtos.filter(p => p.nome?.toLowerCase().includes(term) && !cartItems.find(ci => ci.produto.id === p.id));
+          if (filtered.length === 0) { produtoResults.classList.remove('show'); return; }
+          produtoResults.innerHTML = filtered.slice(0, 8).map(p => `
+            <div class="product-search-item" data-id="${p.id}">
+              <div>
+                <div style="font-weight:500">${p.nome}</div>
+                <div style="font-size:11px;color:var(--text-muted)">Estoque: ${p.estoque} ${p.unidade || ''}</div>
+              </div>
+              <span style="font-weight:600;color:var(--accent-green)">${formatCurrency(p.preco_venda)}</span>
+            </div>
+          `).join('');
+          produtoResults.classList.add('show');
+          produtoResults.querySelectorAll('.product-search-item').forEach(item => {
+            item.addEventListener('click', () => {
+              const produto = produtos.find(p => p.id === item.dataset.id);
+              if (produto) {
+                cartItems.push({ produto, quantidade: 1 });
+                renderCart();
+                produtoSearch.value = '';
+                produtoResults.classList.remove('show');
+              }
+            });
+          });
+        });
+
+        // Fecha dropdowns ao clicar fora
+        element.addEventListener('click', (e) => {
+          if (!e.target.closest('#clienteSearch') && !e.target.closest('#clienteResults')) clienteResults.classList.remove('show');
+          if (!e.target.closest('#produtoSearch') && !e.target.closest('#produtoResults')) produtoResults.classList.remove('show');
+        });
+
+        function renderCart() {
+          const cartEl = element.querySelector('#cartItems');
+          const summaryEl = element.querySelector('#saleSummary');
+
+          if (cartItems.length === 0) {
+            cartEl.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text-muted);font-size:14px">Adicione produtos à venda</div>';
+            summaryEl.style.display = 'none';
+            return;
+          }
+
+          cartEl.innerHTML = cartItems.map((item, idx) => `
+            <div class="sale-item">
+              <div class="sale-item-info">
+                <div class="sale-item-name">${item.produto.nome}</div>
+                <div class="sale-item-detail">${formatCurrency(item.produto.preco_venda)} / ${item.produto.unidade || 'un'} | Estoque: ${item.produto.estoque}</div>
+              </div>
+              <div class="sale-item-qty">
+                <input class="form-input" type="number" min="0.01" max="${item.produto.estoque}" step="0.01" value="${item.quantidade}" data-idx="${idx}" />
+              </div>
+              <div class="sale-item-total">${formatCurrency(item.quantidade * item.produto.preco_venda)}</div>
+              <button class="sale-item-remove" data-remove="${idx}">${ICONS.trash}</button>
+            </div>
+          `).join('');
+
+          const total = cartItems.reduce((sum, item) => sum + item.quantidade * item.produto.preco_venda, 0);
+          summaryEl.style.display = 'block';
+          summaryEl.innerHTML = `
+            <div class="sale-summary">
+              <div class="sale-summary-row"><span>${cartItems.length} produto(s)</span><span>${cartItems.reduce((s, i) => s + i.quantidade, 0)} unidade(s)</span></div>
+              <div class="sale-summary-total"><span>TOTAL</span><span>${formatCurrency(total)}</span></div>
+            </div>
+          `;
+
+          // Listeners de quantidade
+          cartEl.querySelectorAll('input[data-idx]').forEach(input => {
+            input.addEventListener('change', () => {
+              const idx = parseInt(input.dataset.idx);
+              const qty = parseFloat(input.value) || 0;
+              if (qty <= 0) { cartItems.splice(idx, 1); }
+              else { cartItems[idx].quantidade = qty; }
+              renderCart();
+            });
+          });
+
+          // Listeners de remoção
+          cartEl.querySelectorAll('[data-remove]').forEach(btn => {
+            btn.addEventListener('click', () => {
+              cartItems.splice(parseInt(btn.dataset.remove), 1);
+              renderCart();
+            });
+          });
+        }
+
+        renderCart();
+
+        // Cancelar
+        element.querySelector('#cancelVenda').addEventListener('click', close);
+
+        // CONFIRMAR VENDA
+        element.querySelector('#confirmarVenda').addEventListener('click', async () => {
+          // Validações
+          if (!selectedCliente) { showToast('Selecione um cliente', 'warning'); return; }
+          if (cartItems.length === 0) { showToast('Adicione pelo menos um produto', 'warning'); return; }
+          const pagamento = element.querySelector('#formaPagamento').value;
+          if (!pagamento) { showToast('Selecione a forma de pagamento', 'warning'); return; }
+
+          // Valida estoque
+          for (const item of cartItems) {
+            if (item.quantidade > item.produto.estoque) {
+              showToast(`Estoque insuficiente para "${item.produto.nome}". Disponível: ${item.produto.estoque}`, 'error');
+              return;
+            }
+          }
+
+          const total = cartItems.reduce((sum, item) => sum + item.quantidade * item.produto.preco_venda, 0);
+
+          const confirmed = await showConfirm({
+            title: 'Confirmar Venda',
+            message: `Registrar venda de <strong>${formatCurrency(total)}</strong> para <strong>${selectedCliente.nome}</strong>?`,
+            type: 'warning',
+            confirmText: 'Confirmar'
+          });
+
+          if (!confirmed) return;
+
+          try {
+            // Usa batch para atomicidade
+            const batch = writeBatch(db);
+
+            // 1. Cria venda
+            const vendaRef = doc(collection(db, 'vendas'));
+            const vendaData = {
+              cliente_id: selectedCliente.id,
+              usuario_id: userData?.id || '',
+              itens: cartItems.map(item => ({
+                produto_id: item.produto.id,
+                nome: item.produto.nome,
+                quantidade: item.quantidade,
+                preco_unitario: item.produto.preco_venda,
+                subtotal: item.quantidade * item.produto.preco_venda
+              })),
+              total,
+              status: 'concluida',
+              forma_pagamento: pagamento,
+              created_at: serverTimestamp()
+            };
+            batch.set(vendaRef, vendaData);
+
+            // 2. Atualiza estoque e cria movimentações
+            for (const item of cartItems) {
+              const prodRef = doc(db, 'produtos', item.produto.id);
+              const novoEstoque = item.produto.estoque - item.quantidade;
+              batch.update(prodRef, { estoque: novoEstoque });
+
+              const movRef = doc(collection(db, 'movimentacoes'));
+              batch.set(movRef, {
+                produto_id: item.produto.id,
+                tipo: 'saida',
+                quantidade: item.quantidade,
+                referencia: `Venda: ${vendaRef.id}`,
+                created_at: serverTimestamp()
+              });
+            }
+
+            // 3. Cria registro financeiro
+            const finRef = doc(collection(db, 'financeiro'));
+            batch.set(finRef, {
+              tipo: 'receber',
+              descricao: `Venda para ${selectedCliente.nome}`,
+              valor: total,
+              status: pagamento === 'fiado' ? 'pendente' : 'pago',
+              venda_id: vendaRef.id,
+              data_vencimento: pagamento === 'fiado' ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) : null,
+              created_at: serverTimestamp()
+            });
+
+            await batch.commit();
+
+            // Atualiza produtos locais
+            for (const item of cartItems) {
+              const p = produtos.find(pr => pr.id === item.produto.id);
+              if (p) p.estoque -= item.quantidade;
+            }
+
+            showToast(`Venda de ${formatCurrency(total)} registrada com sucesso!`, 'success');
+            close();
+          } catch (error) {
+            console.error('Erro ao registrar venda:', error);
+            showToast('Erro ao registrar venda: ' + error.message, 'error');
+          }
+        });
+      }
+
+      // === CANCELAR VENDA ===
+      async function cancelarVenda(venda) {
+        const confirmed = await showConfirm({
+          title: 'Cancelar Venda',
+          message: `Cancelar esta venda de <strong>${formatCurrency(venda.total)}</strong>? O estoque será estornado e o registro financeiro cancelado.`,
+          type: 'danger',
+          confirmText: 'Cancelar Venda'
+        });
+
+        if (!confirmed) return;
+
+        try {
+          const batch = writeBatch(db);
+
+          // Marca venda como cancelada
+          batch.update(doc(db, 'vendas', venda.id), { status: 'cancelada' });
+
+          // Estorna estoque
+          for (const item of (venda.itens || [])) {
+            const prodRef = doc(db, 'produtos', item.produto_id);
+            const prodSnap = await getDoc(prodRef);
+            if (prodSnap.exists()) {
+              const novoEstoque = (prodSnap.data().estoque || 0) + item.quantidade;
+              batch.update(prodRef, { estoque: novoEstoque });
+            }
+
+            const movRef = doc(collection(db, 'movimentacoes'));
+            batch.set(movRef, {
+              produto_id: item.produto_id,
+              tipo: 'entrada',
+              quantidade: item.quantidade,
+              referencia: `Cancelamento venda: ${venda.id}`,
+              created_at: serverTimestamp()
+            });
+          }
+
+          // Cancela financeiro
+          const finSnap = await getDocs(collection(db, 'financeiro'));
+          finSnap.docs.forEach(d => {
+            if (d.data().venda_id === venda.id) {
+              batch.update(doc(db, 'financeiro', d.id), { status: 'cancelado' });
+            }
+          });
+
+          await batch.commit();
+          showToast('Venda cancelada. Estoque estornado.', 'success');
+        } catch (error) {
+          showToast('Erro: ' + error.message, 'error');
+        }
+      }
+
+      // === TABELA DE VENDAS ===
+      onSnapshot(collection(db, 'vendas'), (snapshot) => {
+        vendas = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        vendas.sort((a, b) => {
+          const da = a.created_at?.toDate ? a.created_at.toDate() : new Date(a.created_at || 0);
+          const db2 = b.created_at?.toDate ? b.created_at.toDate() : new Date(b.created_at || 0);
+          return db2 - da;
+        });
+
+        renderDataTable({
+          containerId: 'vendasContent',
+          title: 'Vendas',
+          columns: [
+            { key: 'created_at', label: 'Data', render: (v) => formatDateTime(v) },
+            { key: 'cliente_id', label: 'Cliente', render: (v) => {
+              const c = clientes.find(cl => cl.id === v);
+              return `<span style="font-weight:500;color:var(--text-primary)">${c?.nome || '—'}</span>`;
+            }},
+            { key: 'itens', label: 'Itens', render: (v) => `${v?.length || 0} produto(s)` },
+            { key: 'total', label: 'Total', render: (v) => `<span style="font-weight:700;color:var(--accent-green)">${formatCurrency(v)}</span>` },
+            { key: 'forma_pagamento', label: 'Pagamento', render: (v) => {
+              const icons = { dinheiro: '💵', pix: '📱', fiado: '📝' };
+              return `<span class="badge badge-neutral">${icons[v] || ''} ${ENUM_LABELS.forma_pagamento[v] || v}</span>`;
+            }},
+            { key: 'status', label: 'Status', render: (v) => `<span class="badge ${v === 'concluida' ? 'badge-success' : 'badge-danger'}">${ENUM_LABELS.status_venda[v] || v}</span>` }
+          ],
+          data: vendas,
+          searchFields: [],
+          onAdd: () => openNovaVenda(),
+          addLabel: 'Nova Venda',
+          emptyMessage: 'Nenhuma venda registrada',
+          emptyIcon: '🛒',
+          actions: [
+            { id: 'view', label: 'Detalhes', icon: ICONS.eye, handler: (item) => {
+              const cliente = clientes.find(c => c.id === item.cliente_id);
+              showModal({
+                title: 'Detalhes da Venda',
+                content: `
+                  <div style="margin-bottom:16px">
+                    <div style="font-size:13px;color:var(--text-muted)">Cliente</div>
+                    <div style="font-weight:600">${cliente?.nome || '—'}</div>
+                  </div>
+                  <div style="margin-bottom:16px">
+                    <div style="font-size:13px;color:var(--text-muted)">Data</div>
+                    <div>${formatDateTime(item.created_at)}</div>
+                  </div>
+                  <div style="margin-bottom:16px">
+                    <div style="font-size:13px;color:var(--text-muted);margin-bottom:8px">Itens</div>
+                    ${(item.itens || []).map(i => `
+                      <div style="display:flex;justify-content:space-between;padding:8px 12px;background:var(--bg-tertiary);border-radius:var(--radius-sm);margin-bottom:4px">
+                        <span>${i.nome} × ${i.quantidade}</span>
+                        <span style="font-weight:600">${formatCurrency(i.subtotal)}</span>
+                      </div>
+                    `).join('')}
+                  </div>
+                  <div class="sale-summary">
+                    <div class="sale-summary-row"><span>Pagamento</span><span>${ENUM_LABELS.forma_pagamento[item.forma_pagamento] || item.forma_pagamento}</span></div>
+                    <div class="sale-summary-row"><span>Status</span><span class="badge ${item.status === 'concluida' ? 'badge-success' : 'badge-danger'}">${ENUM_LABELS.status_venda[item.status] || item.status}</span></div>
+                    <div class="sale-summary-total"><span>TOTAL</span><span>${formatCurrency(item.total)}</span></div>
+                  </div>
+                `
+              });
+            }},
+            { id: 'cancel', label: 'Cancelar', icon: ICONS.close, handler: (item) => {
+              if (item.status === 'cancelada') {
+                showToast('Esta venda já está cancelada', 'warning');
+                return;
+              }
+              cancelarVenda(item);
+            }}
+          ]
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

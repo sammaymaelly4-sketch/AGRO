@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Estoque — Sentinela Agro ERP</title>
+  <meta name="description" content="Controle de estoque do Sentinela Agro ERP" />
+  <meta name="theme-color" content="#0a0f1a" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌿</text></svg>" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <div class="app-layout">
+    <div class="main-content" id="mainContent">
+      <div class="page-content">
+        <div class="page-header">
+          <div class="page-header-info">
+            <h1>📦 Estoque</h1>
+            <p>Controle de entradas, saídas e ajustes</p>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-primary" id="btnEntrada">📥 Entrada de Estoque</button>
+          </div>
+        </div>
+
+        <!-- Métricas -->
+        <div class="metrics-grid" id="estoqueMetrics"></div>
+
+        <!-- Tabela de estoque -->
+        <div id="estoqueTable" style="margin-bottom:28px"></div>
+
+        <!-- Movimentações -->
+        <div id="movimentacoesTable"></div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { initAuth, requireAuth } from '/js/auth.js';
+    import { db, collection, addDoc, getDocs, updateDoc, doc, onSnapshot, serverTimestamp } from '/js/firebase-config.js';
+    import { renderSidebar, renderTopbar, renderDataTable, renderMetricCard, showModal, showToast, buildForm, getFormData } from '/js/components.js';
+    import { formatCurrency, formatDate, formatDateTime, formatQuantity, ICONS, ENUM_LABELS, validateRequired, getStockStatusBadge } from '/js/utils.js';
+
+    initAuth();
+
+    (async () => {
+      const userData = await requireAuth();
+      renderSidebar('estoque');
+      renderTopbar({ title: 'Estoque', subtitle: 'Movimentações e controle', user: userData });
+
+      let produtos = [];
+      let movimentacoes = [];
+
+      // Entrada de estoque
+      function openEntradaEstoque(produto = null) {
+        const prodOptions = produtos.map(p => ({ value: p.id, label: `${p.nome} (${p.estoque} ${ENUM_LABELS.unidade_short[p.unidade] || ''})` }));
+        
+        const fields = [
+          { name: 'produto_id', label: 'Produto', type: 'select', required: true, options: prodOptions, value: produto?.id || '' },
+          { name: 'quantidade', label: 'Quantidade', type: 'number', step: '0.01', min: 0.01, required: true, placeholder: 'Quantidade a adicionar' },
+          { name: 'tipo', label: 'Tipo de Movimentação', type: 'select', required: true, options: [
+            { value: 'entrada', label: '📥 Entrada (compra/recebimento)' },
+            { value: 'ajuste', label: '🔧 Ajuste (correção de inventário)' }
+          ], value: 'entrada' },
+          { name: 'referencia', label: 'Referência / Nota Fiscal', type: 'text', placeholder: 'Ex: NF 12345, Compra fornecedor X...' }
+        ];
+
+        const { element, close } = showModal({
+          title: '📥 Movimentação de Estoque',
+          content: `<form id="entradaForm">${buildForm(fields)}</form>`,
+          footer: `
+            <button class="btn btn-secondary" id="cancelBtn">Cancelar</button>
+            <button class="btn btn-primary" id="saveBtn">Confirmar</button>
+          `
+        });
+
+        element.querySelector('#cancelBtn').addEventListener('click', close);
+        element.querySelector('#saveBtn').addEventListener('click', async () => {
+          const data = getFormData(element.querySelector('#entradaForm'));
+          
+          const validation = validateRequired({ Produto: data.produto_id, Quantidade: data.quantidade, Tipo: data.tipo });
+          if (!validation.valid) {
+            showToast(validation.errors[0], 'error');
+            return;
+          }
+
+          const quantidade = parseFloat(data.quantidade);
+          if (quantidade <= 0) {
+            showToast('Quantidade deve ser maior que zero', 'error');
+            return;
+          }
+
+          const produto_selected = produtos.find(p => p.id === data.produto_id);
+          if (!produto_selected) {
+            showToast('Produto não encontrado', 'error');
+            return;
+          }
+
+          try {
+            // Atualiza estoque
+            const novoEstoque = data.tipo === 'entrada' 
+              ? produto_selected.estoque + quantidade
+              : quantidade; // ajuste define o valor absoluto
+
+            await updateDoc(doc(db, 'produtos', data.produto_id), { estoque: novoEstoque });
+
+            // Registra movimentação
+            await addDoc(collection(db, 'movimentacoes'), {
+              produto_id: data.produto_id,
+              tipo: data.tipo,
+              quantidade: data.tipo === 'entrada' ? quantidade : quantidade - produto_selected.estoque,
+              referencia: data.referencia || '',
+              created_at: serverTimestamp()
+            });
+
+            showToast(`Estoque ${data.tipo === 'entrada' ? 'atualizado' : 'ajustado'} com sucesso!`, 'success');
+            close();
+          } catch (error) {
+            showToast('Erro: ' + error.message, 'error');
+          }
+        });
+      }
+
+      document.getElementById('btnEntrada').addEventListener('click', () => openEntradaEstoque());
+
+      // Listeners em tempo real
+      onSnapshot(collection(db, 'produtos'), (snapshot) => {
+        produtos = snapshot.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => p.ativo !== false);
+        produtos.sort((a, b) => (a.nome || '').localeCompare(b.nome || ''));
+        renderEstoque();
+      });
+
+      onSnapshot(collection(db, 'movimentacoes'), (snapshot) => {
+        movimentacoes = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        movimentacoes.sort((a, b) => {
+          const da = a.created_at?.toDate ? a.created_at.toDate() : new Date(a.created_at || 0);
+          const db2 = b.created_at?.toDate ? b.created_at.toDate() : new Date(b.created_at || 0);
+          return db2 - da;
+        });
+        renderMovimentacoes();
+      });
+
+      function renderEstoque() {
+        const totalItens = produtos.reduce((s, p) => s + (p.estoque || 0), 0);
+        const baixoEstoque = produtos.filter(p => p.estoque <= (p.estoque_minimo || 0));
+        const semEstoque = produtos.filter(p => p.estoque <= 0);
+        const valorEstoque = produtos.reduce((s, p) => s + (p.estoque || 0) * (p.custo || p.preco_venda || 0), 0);
+
+        document.getElementById('estoqueMetrics').innerHTML = `
+          ${renderMetricCard({ icon: '📦', iconColor: 'blue', value: produtos.length.toString(), label: 'Produtos Ativos', glowClass: 'blue-glow' })}
+          ${renderMetricCard({ icon: '💰', iconColor: 'green', value: formatCurrency(valorEstoque), label: 'Valor em Estoque', glowClass: 'green-glow' })}
+          ${renderMetricCard({ icon: '⚠️', iconColor: 'amber', value: baixoEstoque.length.toString(), label: 'Estoque Baixo', glowClass: baixoEstoque.length > 0 ? 'amber-glow' : '' })}
+          ${renderMetricCard({ icon: '🚫', iconColor: 'red', value: semEstoque.length.toString(), label: 'Sem Estoque', glowClass: semEstoque.length > 0 ? 'red-glow' : '' })}
+        `;
+
+        renderDataTable({
+          containerId: 'estoqueTable',
+          title: 'Posição de Estoque',
+          columns: [
+            { key: 'nome', label: 'Produto', render: (v, row) => `
+              <div>
+                <div style="font-weight:600;color:var(--text-primary)">${v}</div>
+                <div style="font-size:12px;color:var(--text-muted)">${ENUM_LABELS.tipo_produto[row.tipo] || row.tipo}</div>
+              </div>
+            `},
+            { key: 'estoque', label: 'Atual', render: (v, row) => {
+              const status = getStockStatusBadge(v, row.estoque_minimo);
+              return `<span class="badge ${status.class}">${v} ${ENUM_LABELS.unidade_short[row.unidade] || ''}</span>`;
+            }},
+            { key: 'estoque_minimo', label: 'Mínimo', render: (v, row) => `${v || 0} ${ENUM_LABELS.unidade_short[row.unidade] || ''}` },
+            { key: 'preco_venda', label: 'Valor Unit.', render: (v) => formatCurrency(v) },
+            { key: 'estoque', label: 'Valor Total', render: (v, row) => `<span style="font-weight:600">${formatCurrency(v * (row.custo || row.preco_venda || 0))}</span>` }
+          ],
+          data: produtos,
+          searchFields: ['nome', 'tipo'],
+          emptyMessage: 'Nenhum produto no estoque',
+          emptyIcon: '📦',
+          actions: [
+            { id: 'entrada', label: 'Entrada', icon: ICONS.upload, handler: (item) => openEntradaEstoque(item) }
+          ]
+        });
+      }
+
+      function renderMovimentacoes() {
+        renderDataTable({
+          containerId: 'movimentacoesTable',
+          title: 'Histórico de Movimentações',
+          columns: [
+            { key: 'created_at', label: 'Data', render: (v) => formatDateTime(v) },
+            { key: 'produto_id', label: 'Produto', render: (v) => {
+              const p = produtos.find(pr => pr.id === v);
+              return p?.nome || '—';
+            }},
+            { key: 'tipo', label: 'Tipo', render: (v) => {
+              const colors = { entrada: 'badge-success', saida: 'badge-danger', ajuste: 'badge-info' };
+              const icons = { entrada: '📥', saida: '📤', ajuste: '🔧' };
+              return `<span class="badge ${colors[v] || 'badge-neutral'}">${icons[v] || ''} ${ENUM_LABELS.tipo_movimentacao[v] || v}</span>`;
+            }},
+            { key: 'quantidade', label: 'Quantidade', render: (v, row) => {
+              const sign = row.tipo === 'entrada' ? '+' : row.tipo === 'saida' ? '-' : '';
+              const color = row.tipo === 'entrada' ? 'var(--accent-green)' : row.tipo === 'saida' ? 'var(--accent-red)' : 'var(--text-primary)';
+              return `<span style="font-weight:600;color:${color}">${sign}${v}</span>`;
+            }},
+            { key: 'referencia', label: 'Referência' }
+          ],
+          data: movimentacoes.slice(0, 50),
+          searchFields: ['referencia'],
+          emptyMessage: 'Nenhuma movimentação registrada',
+          emptyIcon: '📋',
+          pageSize: 10
+        });
+      }
+    })();
+  </script>
+</body>
+</html>
